@@ -347,6 +347,36 @@ function makeLabelSprite(label, light) {
   return sprite;
 }
 
+function makeCircleTexture({ soft = false } = {}) {
+  const size = 96;
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  canvas.width = size;
+  canvas.height = size;
+
+  const center = size / 2;
+  if (soft) {
+    const gradient = context.createRadialGradient(center, center, 0, center, center, center);
+    gradient.addColorStop(0, "rgba(255, 255, 255, 0.82)");
+    gradient.addColorStop(0.58, "rgba(255, 255, 255, 0.45)");
+    gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+    context.fillStyle = gradient;
+  } else {
+    context.fillStyle = "#fff";
+  }
+
+  context.beginPath();
+  context.arc(center, center, center - 2, 0, FULL_CIRCLE);
+  context.fill();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+
+  return texture;
+}
+
 function disposeObject3d(object) {
   object.traverse((child) => {
     child.geometry?.dispose();
@@ -459,24 +489,33 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
     graphGroup.rotation.order = "YXZ";
     scene.add(graphGroup);
 
-    const nodeGeometry = new THREE.SphereGeometry(1, 8, 6);
-    const haloGeometry = new THREE.SphereGeometry(1, 8, 6);
+    const nodeGeometry = new THREE.PlaneGeometry(2, 2);
+    const haloGeometry = new THREE.PlaneGeometry(2, 2);
+    const nodeTexture = makeCircleTexture();
+    const haloTexture = makeCircleTexture({ soft: true });
     const nodeMaterial = new THREE.MeshBasicMaterial({
       color: light ? 0x161616 : 0xe2e2e2,
+      map: nodeTexture,
       transparent: true,
       opacity: light ? 0.68 : 0.78,
+      alphaTest: 0.08,
+      depthWrite: false,
     });
     const haloMaterial = new THREE.MeshBasicMaterial({
       color: light ? 0x000000 : 0xffffff,
+      map: haloTexture,
       transparent: true,
-      opacity: light ? 0.055 : 0.07,
+      opacity: light ? 0.14 : 0.16,
       depthWrite: false,
+      depthTest: false,
     });
     const innerHaloMaterial = new THREE.MeshBasicMaterial({
       color: light ? 0x000000 : 0xffffff,
+      map: haloTexture,
       transparent: true,
-      opacity: light ? 0.075 : 0.09,
+      opacity: light ? 0.2 : 0.23,
       depthWrite: false,
+      depthTest: false,
     });
     const nodeMesh = new THREE.InstancedMesh(nodeGeometry, nodeMaterial, graphScale.nodeCount);
     const haloMesh = new THREE.InstancedMesh(haloGeometry, haloMaterial, graphScale.nodeCount);
@@ -517,7 +556,7 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
 
     const tempMatrix = new THREE.Matrix4();
     const tempPosition = new THREE.Vector3();
-    const tempQuaternion = new THREE.Quaternion();
+    const billboardQuaternion = new THREE.Quaternion();
     const tempScale = new THREE.Vector3();
     const tempProjected = new THREE.Vector3();
     const zeroScale = new THREE.Vector3(0.001, 0.001, 0.001);
@@ -614,6 +653,7 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
       graphGroup.rotation.x = rotationRef.current.x;
       graphGroup.rotation.y = rotationRef.current.y;
       graphGroup.position.set(parallaxX, -parallaxY, 0);
+      billboardQuaternion.copy(graphGroup.quaternion).invert();
 
       for (let index = 0; index < dust.length; index += 1) {
         const speck = dust[index];
@@ -689,7 +729,7 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
 
         tempPosition.set(node.localX, node.localY, node.localZ);
         tempScale.set(radius, radius, radius);
-        tempMatrix.compose(tempPosition, tempQuaternion, tempScale);
+        tempMatrix.compose(tempPosition, billboardQuaternion, tempScale);
         nodeMesh.setMatrixAt(node.index, tempMatrix);
 
         if (haloVisible) {
@@ -697,12 +737,12 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
         } else {
           tempScale.copy(zeroScale);
         }
-        tempMatrix.compose(tempPosition, tempQuaternion, tempScale);
+        tempMatrix.compose(tempPosition, billboardQuaternion, tempScale);
         haloMesh.setMatrixAt(node.index, tempMatrix);
 
         const innerHalo = haloVisible ? halo * 0.45 : 0.001;
         tempScale.set(innerHalo, innerHalo, innerHalo);
-        tempMatrix.compose(tempPosition, tempQuaternion, tempScale);
+        tempMatrix.compose(tempPosition, billboardQuaternion, tempScale);
         innerHaloMesh.setMatrixAt(node.index, tempMatrix);
 
         const label = labelSprites[node.index];

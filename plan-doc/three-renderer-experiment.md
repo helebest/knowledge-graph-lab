@@ -33,3 +33,13 @@ Key results:
 
 ## Tradeoff
 The main bundle increased from roughly `229KB` minified to roughly `746KB` minified. This branch is performance-viable, but shipping it should account for the larger initial JS payload or add code splitting.
+
+## Billboard Node Follow-up
+- Replaced low-segment `SphereGeometry(1, 8, 6)` nodes with instanced `PlaneGeometry` circle billboards.
+- Added canvas-generated circle alpha textures for node discs and soft halo discs.
+- Applied the inverse graph rotation to node instance matrices so discs keep facing the camera while the graph rotates in 3D.
+- Visual QA screenshots: `perf-results/three-billboard-desktop.png` and `perf-results/three-billboard-mobile.png`.
+- Verification after the change: `npm test`, `npm run build`, `npm run test:e2e`, and `npm run test:perf` passed.
+- Perf report: `perf-results/graph-perf-2026-06-05T07-44-41-700Z.json`.
+
+Compared with the Canvas mainline report `06-46-58`, the billboard version still improves `desktop-overload-idle` frame p95 (`1.6ms -> 1.4ms`) and keeps dropped frame ratio at `0`, but this single run regressed overload frame p99 (`1.7ms -> 1.9ms`) and click-card p95 (`0.8ms -> 1.0ms`). Treat it as visually fixed but not yet a strict no-regression merge candidate.
