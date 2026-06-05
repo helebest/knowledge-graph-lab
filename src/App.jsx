@@ -201,6 +201,7 @@ function proximityCellKey(cellX, cellY) {
 
 function buildProximityGrid(nodes) {
   const grid = new Map();
+  const cells = [];
 
   for (let index = 0; index < nodes.length; index += 1) {
     const node = nodes[index];
@@ -212,18 +213,20 @@ function buildProximityGrid(nodes) {
     if (bucket) {
       bucket.push(index);
     } else {
-      grid.set(key, [index]);
+      const nextBucket = [index];
+      grid.set(key, nextBucket);
+      cells.push({ cellX, cellY, key, bucket: nextBucket });
     }
 
     node.cellX = cellX;
     node.cellY = cellY;
   }
 
-  return grid;
+  return { grid, cells };
 }
 
 function drawProximityEdges(ctx, nodes, light, proximityEligibility) {
-  const grid = buildProximityGrid(nodes);
+  const { grid, cells } = buildProximityGrid(nodes);
   let proximityChecks = 0;
   let proximityEdgesDrawn = 0;
   const alpha = light ? 0.06 : 0.045;
@@ -234,32 +237,40 @@ function drawProximityEdges(ctx, nodes, light, proximityEligibility) {
   ctx.lineWidth = 0.7;
   ctx.beginPath();
 
-  for (const one of nodes) {
-    const cellX = one.cellX;
-    const cellY = one.cellY;
-
+  for (const cell of cells) {
     for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
       for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-        const bucket = grid.get(proximityCellKey(cellX + offsetX, cellY + offsetY));
+        const neighborKey = proximityCellKey(cell.cellX + offsetX, cell.cellY + offsetY);
+        if (neighborKey < cell.key) continue;
+
+        const bucket = grid.get(neighborKey);
         if (!bucket) continue;
 
-        for (const index of bucket) {
-          const two = nodes[index];
-          if (two.index <= one.index) continue;
-          proximityChecks += 1;
+        const sameCell = neighborKey === cell.key;
+        for (let leftIndex = 0; leftIndex < cell.bucket.length; leftIndex += 1) {
+          const one = nodes[cell.bucket[leftIndex]];
+          const rightStart = sameCell ? leftIndex + 1 : 0;
 
-          const dx = one.x - two.x;
-          if (Math.abs(dx) > PROXIMITY_RADIUS) continue;
-          const dy = one.y - two.y;
-          if (Math.abs(dy) > PROXIMITY_RADIUS) continue;
-          if (
-            dx * dx + dy * dy > PROXIMITY_RADIUS_SQ
-            || !proximityEligibility[one.index * nodes.length + two.index]
-          ) continue;
+          for (let rightIndex = rightStart; rightIndex < bucket.length; rightIndex += 1) {
+            const two = nodes[bucket[rightIndex]];
+            proximityChecks += 1;
 
-          proximityEdgesDrawn += 1;
-          ctx.moveTo(one.x, one.y);
-          ctx.lineTo(two.x, two.y);
+            const dx = one.x - two.x;
+            if (Math.abs(dx) > PROXIMITY_RADIUS) continue;
+            const dy = one.y - two.y;
+            if (Math.abs(dy) > PROXIMITY_RADIUS) continue;
+
+            const first = one.index < two.index ? one : two;
+            const second = one.index < two.index ? two : one;
+            if (
+              dx * dx + dy * dy > PROXIMITY_RADIUS_SQ
+              || !proximityEligibility[first.index * nodes.length + second.index]
+            ) continue;
+
+            proximityEdgesDrawn += 1;
+            ctx.moveTo(one.x, one.y);
+            ctx.lineTo(two.x, two.y);
+          }
         }
       }
     }
