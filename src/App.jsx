@@ -310,32 +310,30 @@ function drawNodeShape(ctx, node, theme, selected, time) {
   const halo = radius * (selected ? 4.8 : node.isHub ? 3.2 : 2);
 
   if (node.isHub || radius > 6 || selected) {
-    ctx.fillStyle = light
-      ? `rgba(0, 0, 0, ${(selected ? 0.11 : 0.045) * depthFade})`
-      : `rgba(255, 255, 255, ${(selected ? 0.13 : 0.055) * depthFade})`;
+    ctx.fillStyle = light ? "#000" : "#fff";
+    ctx.globalAlpha = (selected ? (light ? 0.11 : 0.13) : (light ? 0.045 : 0.055)) * depthFade;
     ctx.beginPath();
     ctx.arc(node.x, node.y, halo, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = light
-      ? `rgba(0, 0, 0, ${(selected ? 0.18 : 0.06) * depthFade})`
-      : `rgba(255, 255, 255, ${(selected ? 0.18 : 0.07) * depthFade})`;
+    ctx.globalAlpha = (selected ? 0.18 : (light ? 0.06 : 0.07)) * depthFade;
     ctx.beginPath();
     ctx.arc(node.x, node.y, halo * 0.45, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  ctx.fillStyle = light
-    ? `rgba(22, 22, 22, ${(selected ? 0.82 : 0.58) * depthFade})`
-    : `rgba(226, 226, 226, ${(selected ? 0.92 : 0.68) * depthFade})`;
+  ctx.fillStyle = light ? "#161616" : "#e2e2e2";
+  ctx.globalAlpha = (selected ? (light ? 0.82 : 0.92) : (light ? 0.58 : 0.68)) * depthFade;
   ctx.beginPath();
   ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.fillStyle = light ? "rgba(255, 255, 255, 0.34)" : "rgba(255, 255, 255, 0.36)";
+  ctx.fillStyle = "#fff";
+  ctx.globalAlpha = light ? 0.34 : 0.36;
   ctx.beginPath();
   ctx.arc(node.x - radius * 0.25, node.y - radius * 0.22, Math.max(1, radius * 0.34), 0, Math.PI * 2);
   ctx.fill();
+  ctx.globalAlpha = 1;
 }
 
 function exposeGraphTestState(nodes, rotation, targetRotation) {
