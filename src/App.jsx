@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import * as THREE from "three";
 import { FiCalendar, FiExternalLink, FiLink, FiMoon, FiPause, FiPlay, FiSun, FiUser, FiX } from "react-icons/fi";
 import { FaGithub } from "react-icons/fa";
 import { FaXTwitter } from "react-icons/fa6";
 import {
-  advanceNodePosition,
   beginDrag,
   endDrag,
   findHitNode,
   pointFromEvent,
-  projectNode,
   updateDragRotation,
 } from "./graphInteraction.js";
 import {
@@ -30,6 +29,8 @@ import {
 const PROXIMITY_RADIUS = 118;
 const PROXIMITY_RADIUS_SQ = PROXIMITY_RADIUS * PROXIMITY_RADIUS;
 const PROXIMITY_KEY_STRIDE = 4096;
+const CAMERA_Z = 900;
+const FULL_CIRCLE = Math.PI * 2;
 
 function initials(label) {
   const parts = label.split(/[\s-]+/).filter(Boolean);
@@ -50,7 +51,7 @@ function hash01(seed) {
 
 function makeDust(count) {
   return Array.from({ length: count }, (_, index) => {
-    const angle = hash01(index + 2) * Math.PI * 2;
+    const angle = hash01(index + 2) * FULL_CIRCLE;
     const radius = Math.pow(hash01(index + 11), 1.8);
 
     return {
@@ -61,7 +62,7 @@ function makeDust(count) {
       drift: 0.4 + hash01(index + 23) * 1.8,
       depth: 0.25 + hash01(index + 41) * 0.9,
       size: 0.45 + hash01(index + 53) * 1.35,
-      seed: hash01(index + 71) * Math.PI * 2,
+      seed: hash01(index + 71) * FULL_CIRCLE,
     };
   });
 }
@@ -93,7 +94,7 @@ function makeNode(index, width, height, formation, nodeCount) {
     }
   } else if (formation === "Product") {
     const spoke = index % 3;
-    const spokeAngle = -Math.PI / 2 + spoke * ((Math.PI * 2) / 3);
+    const spokeAngle = -Math.PI / 2 + spoke * (FULL_CIRCLE / 3);
     const t = Math.floor(index / 3) / Math.ceil(nodeCount / 3);
     const distance = shortSide * (0.08 + t * 0.35);
     const wobble = (hash01(index + 91) - 0.5) * shortSide * 0.09;
@@ -112,7 +113,7 @@ function makeNode(index, width, height, formation, nodeCount) {
       [-0.44, 0.1],
     ];
     const hubIndex = [0, 11, 17, 22, 31, 33, 44].indexOf(index);
-    const angle = hash01(index + 101) * Math.PI * 2;
+    const angle = hash01(index + 101) * FULL_CIRCLE;
     const ring = Math.pow(hash01(index + 109), 0.68);
     const spreadX = Math.min(width * 0.27, 520);
     const spreadY = Math.min(height * 0.32, 260);
@@ -142,57 +143,6 @@ function makeProximityEligibility(nodeCount) {
   }
 
   return eligible;
-}
-
-function drawLine(ctx, from, to, theme, alpha, time, dashed = false) {
-  const light = theme === "light";
-  ctx.globalAlpha = alpha;
-  ctx.strokeStyle = light ? "rgba(20, 20, 20, 0.42)" : "rgba(235, 235, 235, 0.45)";
-  ctx.lineWidth = 0.7;
-  if (dashed && !ctx.__cozyDashed) {
-    ctx.setLineDash([5, 8]);
-    ctx.__cozyDashed = true;
-  } else if (!dashed && ctx.__cozyDashed) {
-    ctx.setLineDash([]);
-    ctx.__cozyDashed = false;
-  }
-  if (dashed) {
-    ctx.lineDashOffset = -time * 10;
-  } else if (ctx.lineDashOffset !== 0) {
-    ctx.lineDashOffset = 0;
-  }
-  ctx.beginPath();
-  ctx.moveTo(from.x, from.y);
-  ctx.lineTo(to.x, to.y);
-  ctx.stroke();
-}
-
-function drawCurve(ctx, from, to, theme, alpha, time) {
-  const light = theme === "light";
-  const midX = (from.x + to.x) / 2;
-  const midY = (from.y + to.y) / 2 - 42 * Math.sin((from.x + to.x) * 0.002 + time);
-
-  ctx.globalAlpha = alpha;
-  ctx.strokeStyle = light ? "rgba(18, 18, 18, 0.26)" : "rgba(230, 230, 230, 0.25)";
-  ctx.lineWidth = 0.55;
-  if (ctx.__cozyDashed) {
-    ctx.setLineDash([]);
-    ctx.__cozyDashed = false;
-  }
-  if (ctx.lineDashOffset !== 0) ctx.lineDashOffset = 0;
-  ctx.beginPath();
-  ctx.moveTo(from.x, from.y);
-  ctx.quadraticCurveTo(midX, midY, to.x, to.y);
-  ctx.stroke();
-}
-
-function resetCanvasLineState(ctx) {
-  ctx.globalAlpha = 1;
-  if (ctx.__cozyDashed) {
-    ctx.setLineDash([]);
-    ctx.__cozyDashed = false;
-  }
-  if (ctx.lineDashOffset !== 0) ctx.lineDashOffset = 0;
 }
 
 function proximityCellKey(cellX, cellY) {
@@ -225,18 +175,105 @@ function buildProximityGrid(nodes) {
   return { grid, cells };
 }
 
-function drawProximityEdges(ctx, nodes, light, proximityEligibility) {
+function exposeGraphTestState(nodes, rotation, targetRotation) {
+  if ((!import.meta.env.DEV && !isGraphPerfEnabled()) || typeof window === "undefined") return;
+
+  window.__COZY_GRAPH_TEST_STATE__ = {
+    rotation: { ...rotation },
+    targetRotation: { ...targetRotation },
+    nodes: nodes.map((node) => ({
+      id: node.card.id,
+      index: node.index,
+      x: node.x,
+      y: node.y,
+      z: node.projectedZ ?? 0,
+    })),
+  };
+}
+
+function targetToLocal(target, width, height) {
+  return {
+    x: target.x - width / 2,
+    y: height / 2 - target.y,
+    z: target.z ?? 0,
+  };
+}
+
+function createLineBuffer(maxSegments, color, opacity) {
+  const positions = new Float32Array(maxSegments * 6);
+  const geometry = new THREE.BufferGeometry();
+  const attribute = new THREE.BufferAttribute(positions, 3);
+  attribute.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute("position", attribute);
+  geometry.setDrawRange(0, 0);
+
+  const material = new THREE.LineBasicMaterial({
+    color,
+    transparent: true,
+    opacity,
+    depthWrite: false,
+    depthTest: false,
+  });
+
+  return {
+    mesh: new THREE.LineSegments(geometry, material),
+    positions,
+    attribute,
+    maxSegments,
+    segmentCount: 0,
+  };
+}
+
+function beginLineBuffer(buffer) {
+  buffer.segmentCount = 0;
+}
+
+function writeThreeLine(buffer, from, to) {
+  if (buffer.segmentCount >= buffer.maxSegments) return;
+
+  const offset = buffer.segmentCount * 6;
+  buffer.positions[offset] = from.localX;
+  buffer.positions[offset + 1] = from.localY;
+  buffer.positions[offset + 2] = from.localZ;
+  buffer.positions[offset + 3] = to.localX;
+  buffer.positions[offset + 4] = to.localY;
+  buffer.positions[offset + 5] = to.localZ;
+  buffer.segmentCount += 1;
+}
+
+function writeThreeCurve(buffer, from, to, time) {
+  const segments = 8;
+  const control = {
+    localX: (from.localX + to.localX) / 2,
+    localY: (from.localY + to.localY) / 2 + 42 * Math.sin((from.x + to.x) * 0.002 + time),
+    localZ: (from.localZ + to.localZ) / 2,
+  };
+  let previous = from;
+
+  for (let index = 1; index <= segments; index += 1) {
+    const t = index / segments;
+    const inv = 1 - t;
+    const point = {
+      localX: inv * inv * from.localX + 2 * inv * t * control.localX + t * t * to.localX,
+      localY: inv * inv * from.localY + 2 * inv * t * control.localY + t * t * to.localY,
+      localZ: inv * inv * from.localZ + 2 * inv * t * control.localZ + t * t * to.localZ,
+    };
+    writeThreeLine(buffer, previous, point);
+    previous = point;
+  }
+}
+
+function commitLineBuffer(buffer) {
+  buffer.mesh.geometry.setDrawRange(0, buffer.segmentCount * 2);
+  buffer.attribute.needsUpdate = true;
+}
+
+function writeProximityLineBuffer(buffer, nodes, proximityEligibility) {
   const { grid, cells } = buildProximityGrid(nodes);
   let proximityChecks = 0;
   let proximityEdgesDrawn = 0;
-  const alpha = light ? 0.06 : 0.045;
 
-  resetCanvasLineState(ctx);
-  ctx.globalAlpha = alpha;
-  ctx.strokeStyle = light ? "rgba(20, 20, 20, 0.42)" : "rgba(235, 235, 235, 0.45)";
-  ctx.lineWidth = 0.7;
-  ctx.beginPath();
-
+  beginLineBuffer(buffer);
   for (const cell of cells) {
     for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
       for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
@@ -266,99 +303,63 @@ function drawProximityEdges(ctx, nodes, light, proximityEligibility) {
             if (dx * dx + dy * dy > PROXIMITY_RADIUS_SQ) continue;
 
             proximityEdgesDrawn += 1;
-            ctx.moveTo(one.x, one.y);
-            ctx.lineTo(two.x, two.y);
+            writeThreeLine(buffer, one, two);
           }
         }
       }
     }
   }
-
-  if (proximityEdgesDrawn > 0) ctx.stroke();
-  ctx.globalAlpha = 1;
+  commitLineBuffer(buffer);
 
   return { proximityChecks, proximityEdgesDrawn };
 }
 
-function drawLabels(ctx, nodes, theme, width) {
-  const light = theme === "light";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = light ? "rgba(18, 18, 18, 0.58)" : "rgba(235, 235, 235, 0.62)";
+function makeLabelSprite(label, light) {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  const font = "20px ui-monospace, SFMono-Regular, Menlo, monospace";
+  context.font = font;
+  const textWidth = Math.ceil(context.measureText(label).width);
+  const width = textWidth + 18;
+  const height = 32;
+  const ratio = 2;
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  context.scale(ratio, ratio);
+  context.font = font;
+  context.textBaseline = "middle";
+  context.textAlign = "center";
+  context.fillStyle = light ? "rgba(18, 18, 18, 0.62)" : "rgba(235, 235, 235, 0.68)";
+  context.fillText(label, width / 2, height / 2);
 
-  let currentFont = "";
-  let currentAlign = "";
-  for (const node of nodes) {
-    if (!node.labelVisible) continue;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(width * 0.34, height * 0.34, 1);
+  sprite.userData.baseScale = { width: width * 0.34, height: height * 0.34 };
 
-    const scale = node.visualScale ?? 1;
-    const side = node.x > width * 0.52 ? -1 : 1;
-    const y = node.index === 0 ? node.y - Math.max(38, node.radius * scale * 4.6) : node.y - Math.max(16, node.radius * scale * 2.5);
-    const x = node.index === 0 ? node.x : node.x + side * Math.max(12, node.radius * scale * 1.5);
-    const fontSize = Math.max(7, Math.round(9 * scale * 10) / 10);
-    const font = `${fontSize}px "GeistMono", ui-monospace, monospace`;
-    const align = node.index === 0 ? "center" : side > 0 ? "left" : "right";
-
-    if (font !== currentFont) {
-      ctx.font = font;
-      currentFont = font;
-    }
-    if (align !== currentAlign) {
-      ctx.textAlign = align;
-      currentAlign = align;
-    }
-    ctx.fillText(node.labelText, x, y);
-  }
+  return sprite;
 }
 
-function drawNodeShape(ctx, node, theme, selected, time) {
-  const light = theme === "light";
-  const scale = node.visualScale ?? 1;
-  const depthFade = Math.max(0.38, Math.min(1, 0.72 + (node.projectedZ ?? 0) / 700));
-  const pulse = 1 + Math.sin(time * 1.4 + node.radius) * 0.04;
-  const radius = node.radius * scale * pulse * (selected ? 1.35 : 1);
-  const halo = radius * (selected ? 4.8 : node.isHub ? 3.2 : 2);
-
-  if (node.isHub || radius > 6 || selected) {
-    ctx.fillStyle = light ? "#000" : "#fff";
-    ctx.globalAlpha = (selected ? (light ? 0.11 : 0.13) : (light ? 0.045 : 0.055)) * depthFade;
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, halo, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.globalAlpha = (selected ? 0.18 : (light ? 0.06 : 0.07)) * depthFade;
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, halo * 0.45, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  ctx.fillStyle = light ? "#161616" : "#e2e2e2";
-  ctx.globalAlpha = (selected ? (light ? 0.82 : 0.92) : (light ? 0.58 : 0.68)) * depthFade;
-  ctx.beginPath();
-  ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = "#fff";
-  ctx.globalAlpha = light ? 0.34 : 0.36;
-  ctx.beginPath();
-  ctx.arc(node.x - radius * 0.25, node.y - radius * 0.22, Math.max(1, radius * 0.34), 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-}
-
-function exposeGraphTestState(nodes, rotation, targetRotation) {
-  if ((!import.meta.env.DEV && !isGraphPerfEnabled()) || typeof window === "undefined") return;
-
-  window.__COZY_GRAPH_TEST_STATE__ = {
-    rotation: { ...rotation },
-    targetRotation: { ...targetRotation },
-    nodes: nodes.map((node) => ({
-      id: node.card.id,
-      index: node.index,
-      x: node.x,
-      y: node.y,
-      z: node.projectedZ ?? 0,
-    })),
-  };
+function disposeObject3d(object) {
+  object.traverse((child) => {
+    child.geometry?.dispose();
+    if (Array.isArray(child.material)) {
+      for (const material of child.material) {
+        material.map?.dispose();
+        material.dispose();
+      }
+    } else {
+      child.material?.map?.dispose();
+      child.material?.dispose();
+    }
+  });
 }
 
 function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
@@ -380,7 +381,12 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
   const dust = useMemo(() => makeDust(graphScale.dustCount), [graphScale.dustCount]);
   const proximityEligibility = useMemo(() => makeProximityEligibility(graphScale.nodeCount), [graphScale.nodeCount]);
   const nodesRef = useRef([]);
+  const selectedIndexRef = useRef(null);
   const [dragging, setDragging] = useState(false);
+
+  useEffect(() => {
+    selectedIndexRef.current = selectedNode?.index ?? null;
+  }, [selectedNode]);
 
   function handleCanvasClick(event) {
     const canvas = canvasRef.current;
@@ -436,7 +442,85 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const context = canvas.getContext("2d");
+    const light = theme === "light";
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: false,
+      alpha: false,
+      powerPreference: "high-performance",
+    });
+    renderer.setClearColor(light ? 0xf5f5f5 : 0x000000, 1);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
+    camera.position.set(0, 0, CAMERA_Z);
+
+    const graphGroup = new THREE.Group();
+    graphGroup.rotation.order = "YXZ";
+    scene.add(graphGroup);
+
+    const nodeGeometry = new THREE.SphereGeometry(1, 8, 6);
+    const haloGeometry = new THREE.SphereGeometry(1, 8, 6);
+    const nodeMaterial = new THREE.MeshBasicMaterial({
+      color: light ? 0x161616 : 0xe2e2e2,
+      transparent: true,
+      opacity: light ? 0.68 : 0.78,
+    });
+    const haloMaterial = new THREE.MeshBasicMaterial({
+      color: light ? 0x000000 : 0xffffff,
+      transparent: true,
+      opacity: light ? 0.055 : 0.07,
+      depthWrite: false,
+    });
+    const innerHaloMaterial = new THREE.MeshBasicMaterial({
+      color: light ? 0x000000 : 0xffffff,
+      transparent: true,
+      opacity: light ? 0.075 : 0.09,
+      depthWrite: false,
+    });
+    const nodeMesh = new THREE.InstancedMesh(nodeGeometry, nodeMaterial, graphScale.nodeCount);
+    const haloMesh = new THREE.InstancedMesh(haloGeometry, haloMaterial, graphScale.nodeCount);
+    const innerHaloMesh = new THREE.InstancedMesh(haloGeometry, innerHaloMaterial, graphScale.nodeCount);
+    nodeMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    haloMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    innerHaloMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    graphGroup.add(haloMesh, innerHaloMesh, nodeMesh);
+
+    const explicitLines = createLineBuffer(Math.max(graphEdges.length, 1), light ? 0x141414 : 0xebebeb, light ? 0.2 : 0.14);
+    const anchorLines = createLineBuffer(graphScale.nodeCount + Math.ceil(graphScale.nodeCount / 5) * 8, light ? 0x141414 : 0xebebeb, light ? 0.1 : 0.075);
+    const proximityLines = createLineBuffer(graphScale.nodeCount * 40, light ? 0x141414 : 0xebebeb, light ? 0.06 : 0.045);
+    graphGroup.add(explicitLines.mesh, anchorLines.mesh, proximityLines.mesh);
+
+    const dustPositions = new Float32Array(graphScale.dustCount * 3);
+    const dustGeometry = new THREE.BufferGeometry();
+    const dustAttribute = new THREE.BufferAttribute(dustPositions, 3);
+    dustAttribute.setUsage(THREE.DynamicDrawUsage);
+    dustGeometry.setAttribute("position", dustAttribute);
+    const dustMaterial = new THREE.PointsMaterial({
+      color: light ? 0x000000 : 0xffffff,
+      opacity: light ? 0.16 : 0.22,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      size: 1.25,
+      sizeAttenuation: false,
+    });
+    const dustPoints = new THREE.Points(dustGeometry, dustMaterial);
+    scene.add(dustPoints);
+
+    const labelSprites = Array.from({ length: graphScale.nodeCount }, (_, index) => {
+      if (index >= graphNodes.length) return null;
+      const sprite = makeLabelSprite(getNodeContent(index).label.toUpperCase(), light);
+      graphGroup.add(sprite);
+      return sprite;
+    });
+
+    const tempMatrix = new THREE.Matrix4();
+    const tempPosition = new THREE.Vector3();
+    const tempQuaternion = new THREE.Quaternion();
+    const tempScale = new THREE.Vector3();
+    const tempProjected = new THREE.Vector3();
+    const zeroScale = new THREE.Vector3(0.001, 0.001, 0.001);
     let frame = 0;
     let width = 0;
     let height = 0;
@@ -448,11 +532,11 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
       dpr = Math.min(window.devicePixelRatio || 1, 2);
       width = nextWidth;
       height = nextHeight;
-      canvas.width = Math.floor(width * dpr);
-      canvas.height = Math.floor(height * dpr);
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
-      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      renderer.setPixelRatio(dpr);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(height / (2 * CAMERA_Z)));
+      camera.updateProjectionMatrix();
       perfCollector?.updateMetadata({
         scale: graphScale.name,
         nodeCount: graphScale.nodeCount,
@@ -462,14 +546,21 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
 
       const nextNodes = Array.from({ length: graphScale.nodeCount }, (_, index) => {
         const target = makeNode(index, width, height, formation, graphScale.nodeCount);
+        const localTarget = targetToLocal(target, width, height);
         const current = nodesRef.current[index];
         return {
           ...target,
-          x: current?.x ?? target.x + (hash01(index + 201) - 0.5) * 180,
-          y: current?.y ?? target.y + (hash01(index + 211) - 0.5) * 110,
+          x: current?.x ?? target.x,
+          y: current?.y ?? target.y,
+          localX: current?.localX ?? localTarget.x + (hash01(index + 201) - 0.5) * 180,
+          localY: current?.localY ?? localTarget.y + (hash01(index + 211) - 0.5) * 110,
+          localZ: current?.localZ ?? localTarget.z,
           targetZ: target.z,
           targetX: target.x,
           targetY: target.y,
+          targetLocalX: localTarget.x,
+          targetLocalY: localTarget.y,
+          targetLocalZ: localTarget.z,
         };
       });
       nodesRef.current = nextNodes;
@@ -478,6 +569,7 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
     function retarget() {
       nodesRef.current = Array.from({ length: graphScale.nodeCount }, (_, index) => {
         const target = makeNode(index, width, height, formation, graphScale.nodeCount);
+        const localTarget = targetToLocal(target, width, height);
         const current = nodesRef.current[index] || target;
         return {
           ...current,
@@ -490,6 +582,9 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
           targetX: target.x,
           targetY: target.y,
           targetZ: target.z,
+          targetLocalX: localTarget.x,
+          targetLocalY: localTarget.y,
+          targetLocalZ: localTarget.z,
         };
       });
     }
@@ -505,44 +600,48 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
     function render(now) {
       const frameRecorder = createFrameRecorder(perfCollector, now);
       const time = now * 0.001;
-      const light = theme === "light";
-      context.fillStyle = light ? "#f5f5f5" : "#000";
-      context.fillRect(0, 0, width, height);
 
       const mouse = mouseRef.current;
       const parallaxX = mouse.active ? (mouse.x - width / 2) * 0.012 : 0;
       const parallaxY = mouse.active ? (mouse.y - height / 2) * 0.012 : 0;
       const centerX = width / 2 + parallaxX;
       const centerY = height * 0.52 + parallaxY;
-      const graphCenter = { x: width / 2, y: height * 0.53 };
+      const dustRadiusX = width * 0.49;
+      const dustRadiusY = height * 0.48;
 
       rotationRef.current.x += (targetRotationRef.current.x - rotationRef.current.x) * 0.12;
       rotationRef.current.y += (targetRotationRef.current.y - rotationRef.current.y) * 0.12;
+      graphGroup.rotation.x = rotationRef.current.x;
+      graphGroup.rotation.y = rotationRef.current.y;
+      graphGroup.position.set(parallaxX, -parallaxY, 0);
 
-      context.fillStyle = light ? "#000" : "#fff";
-      for (const speck of dust) {
+      for (let index = 0; index < dust.length; index += 1) {
+        const speck = dust[index];
         const drift = Math.sin(time * speck.drift + speck.seed) * 18;
-        const x = centerX + speck.angleX * (width * 0.49) * speck.radius + drift;
-        const y = centerY + speck.angleY * (height * 0.48) * speck.radius + drift * 0.18;
-        const alpha = light ? 0.08 * speck.depth : 0.11 * speck.depth;
-
-        context.globalAlpha = alpha;
-        context.beginPath();
-        context.arc(x, y, speck.size, 0, Math.PI * 2);
-        context.fill();
+        const x = centerX + speck.angleX * dustRadiusX * speck.radius + drift;
+        const y = centerY + speck.angleY * dustRadiusY * speck.radius + drift * 0.18;
+        const offset = index * 3;
+        dustPositions[offset] = x - width / 2;
+        dustPositions[offset + 1] = height / 2 - y;
+        dustPositions[offset + 2] = -260 + speck.depth * 120;
       }
-      context.globalAlpha = 1;
+      dustAttribute.needsUpdate = true;
       frameRecorder?.stage("backgroundDust");
 
       const nodes = nodesRef.current;
-      const parallax = { x: parallaxX, y: parallaxY };
+      camera.updateMatrixWorld();
+      graphGroup.updateMatrixWorld();
       for (const node of nodes) {
-        const projected = projectNode(node, graphCenter, rotationRef.current, parallax);
-        node.projectedZ = projected.z;
-        node.visualScale = projected.scale;
-        const next = advanceNodePosition(node, projected);
-        node.x = next.x;
-        node.y = next.y;
+        node.localX += ((node.targetLocalX ?? 0) - node.localX) * 0.045;
+        node.localY += ((node.targetLocalY ?? 0) - node.localY) * 0.045;
+        node.localZ += ((node.targetLocalZ ?? 0) - node.localZ) * 0.045;
+
+        tempProjected.set(node.localX, node.localY, node.localZ).applyMatrix4(graphGroup.matrixWorld);
+        node.projectedZ = tempProjected.z;
+        node.visualScale = Math.max(0.68, Math.min(1.34, CAMERA_Z / (CAMERA_Z - tempProjected.z)));
+        tempProjected.project(camera);
+        node.x = (tempProjected.x + 1) * width * 0.5;
+        node.y = (1 - tempProjected.y) * height * 0.5;
       }
       getGraphPerfCollector()?.markRotationFrame();
       exposeGraphTestState(nodes, rotationRef.current, targetRotationRef.current);
@@ -553,44 +652,76 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
         if (node.labelVisible) contentNodeById.set(node.card.id, node);
       }
 
+      beginLineBuffer(explicitLines);
       for (const edge of graphEdges) {
         const source = contentNodeById.get(edge.source);
         const target = contentNodeById.get(edge.target);
         if (source && target) {
-          drawLine(context, source, target, theme, light ? 0.2 : 0.14, time, true);
+          writeThreeLine(explicitLines, source, target);
         }
       }
+      commitLineBuffer(explicitLines);
       frameRecorder?.stage("explicitEdges");
 
+      beginLineBuffer(anchorLines);
       for (let index = 1; index < nodes.length; index += 1) {
         const node = nodes[index];
         const anchor = nodes[Math.floor(hash01(index + 307) * index)];
-        drawLine(context, node, anchor, theme, light ? 0.1 : 0.075, time, index % 3 === 0);
+        writeThreeLine(anchorLines, node, anchor);
 
         if (index % 5 === 0) {
-          drawCurve(context, nodes[0], node, theme, light ? 0.085 : 0.055, time);
+          writeThreeCurve(anchorLines, nodes[0], node, time);
         }
       }
+      commitLineBuffer(anchorLines);
       frameRecorder?.stage("anchorEdges");
 
-      const { proximityChecks, proximityEdgesDrawn } = drawProximityEdges(context, nodes, light, proximityEligibility);
-      resetCanvasLineState(context);
+      const { proximityChecks, proximityEdgesDrawn } = writeProximityLineBuffer(proximityLines, nodes, proximityEligibility);
       frameRecorder?.stage("proximityEdges");
 
-      const sortedNodes = [...nodes].sort((a, b) => (a.projectedZ ?? 0) - (b.projectedZ ?? 0));
-      const selectedRenderNode = sortedNodes.find((node) => selectedNode?.index === node.index);
       frameRecorder?.stage("depthSort");
-      for (const node of sortedNodes) {
-        if (selectedRenderNode?.index === node.index) continue;
-        drawNodeShape(context, node, theme, false, time);
-      }
+      for (const node of nodes) {
+        const selected = selectedIndexRef.current === node.index;
+        const pulse = 1 + Math.sin(time * 1.4 + node.radius) * 0.04;
+        const radius = node.radius * pulse * (selected ? 1.35 : 1);
+        const haloVisible = node.isHub || radius > 6 || selected;
+        const halo = radius * (selected ? 4.8 : node.isHub ? 3.2 : 2);
 
-      if (selectedRenderNode) {
-        drawNodeShape(context, selectedRenderNode, theme, true, time);
+        tempPosition.set(node.localX, node.localY, node.localZ);
+        tempScale.set(radius, radius, radius);
+        tempMatrix.compose(tempPosition, tempQuaternion, tempScale);
+        nodeMesh.setMatrixAt(node.index, tempMatrix);
+
+        if (haloVisible) {
+          tempScale.set(halo, halo, halo);
+        } else {
+          tempScale.copy(zeroScale);
+        }
+        tempMatrix.compose(tempPosition, tempQuaternion, tempScale);
+        haloMesh.setMatrixAt(node.index, tempMatrix);
+
+        const innerHalo = haloVisible ? halo * 0.45 : 0.001;
+        tempScale.set(innerHalo, innerHalo, innerHalo);
+        tempMatrix.compose(tempPosition, tempQuaternion, tempScale);
+        innerHaloMesh.setMatrixAt(node.index, tempMatrix);
+
+        const label = labelSprites[node.index];
+        if (label) {
+          const side = node.x > width * 0.52 ? -1 : 1;
+          const yOffset = node.index === 0 ? Math.max(38, node.radius * node.visualScale * 4.6) : Math.max(16, node.radius * node.visualScale * 2.5);
+          const xOffset = node.index === 0 ? 0 : side * Math.max(12, node.radius * node.visualScale * 1.5);
+          const baseScale = label.userData.baseScale;
+          label.visible = node.labelVisible && (width > 520 || node.index === 0 || node.isHub);
+          label.position.set(node.localX + xOffset, node.localY + yOffset, node.localZ);
+          label.scale.set(baseScale.width * node.visualScale, baseScale.height * node.visualScale, 1);
+        }
       }
+      nodeMesh.instanceMatrix.needsUpdate = true;
+      haloMesh.instanceMatrix.needsUpdate = true;
+      innerHaloMesh.instanceMatrix.needsUpdate = true;
+      renderer.render(scene, camera);
       frameRecorder?.stage("nodeDraw");
 
-      drawLabels(context, sortedNodes, theme, width);
       frameRecorder?.stage("labelDraw");
       frameRecorder?.end({ proximityChecks, proximityEdgesDrawn });
 
@@ -609,8 +740,10 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
       window.removeEventListener("resize", resize);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseleave", onLeave);
+      disposeObject3d(scene);
+      renderer.dispose();
     };
-  }, [dust, formation, graphScale, perfCollector, proximityEligibility, selectedNode, theme]);
+  }, [dust, formation, graphScale, perfCollector, proximityEligibility, theme]);
 
   return (
     <canvas
