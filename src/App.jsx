@@ -29,6 +29,7 @@ import {
 
 const PROXIMITY_RADIUS = 118;
 const PROXIMITY_RADIUS_SQ = PROXIMITY_RADIUS * PROXIMITY_RADIUS;
+const PROXIMITY_KEY_STRIDE = 4096;
 
 function initials(label) {
   const parts = label.split(/[\s-]+/).filter(Boolean);
@@ -194,6 +195,10 @@ function resetCanvasLineState(ctx) {
   if (ctx.lineDashOffset !== 0) ctx.lineDashOffset = 0;
 }
 
+function proximityCellKey(cellX, cellY) {
+  return cellX * PROXIMITY_KEY_STRIDE + cellY;
+}
+
 function buildProximityGrid(nodes) {
   const grid = new Map();
 
@@ -201,7 +206,7 @@ function buildProximityGrid(nodes) {
     const node = nodes[index];
     const cellX = Math.floor(node.x / PROXIMITY_RADIUS);
     const cellY = Math.floor(node.y / PROXIMITY_RADIUS);
-    const key = `${cellX}:${cellY}`;
+    const key = proximityCellKey(cellX, cellY);
     const bucket = grid.get(key);
 
     if (bucket) {
@@ -235,7 +240,7 @@ function drawProximityEdges(ctx, nodes, light, proximityEligibility) {
 
     for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
       for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-        const bucket = grid.get(`${cellX + offsetX}:${cellY + offsetY}`);
+        const bucket = grid.get(proximityCellKey(cellX + offsetX, cellY + offsetY));
         if (!bucket) continue;
 
         for (const index of bucket) {
