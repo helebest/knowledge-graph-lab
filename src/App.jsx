@@ -131,6 +131,18 @@ function makeNode(index, width, height, formation, nodeCount) {
   return { x, y, z, radius, depth, isHub, index, card, labelText: card.label.toUpperCase(), labelVisible: index < graphNodes.length };
 }
 
+function makeProximityEligibility(nodeCount) {
+  const eligible = new Uint8Array(nodeCount * nodeCount);
+
+  for (let a = 0; a < nodeCount; a += 1) {
+    for (let b = a + 1; b < nodeCount; b += 1) {
+      eligible[a * nodeCount + b] = hash01(a * 17 + b * 23) >= 0.72 ? 1 : 0;
+    }
+  }
+
+  return eligible;
+}
+
 function drawLine(ctx, from, to, theme, alpha, time, dashed = false) {
   const light = theme === "light";
   ctx.globalAlpha = alpha;
@@ -205,7 +217,7 @@ function buildProximityGrid(nodes) {
   return grid;
 }
 
-function drawProximityEdges(ctx, nodes, light) {
+function drawProximityEdges(ctx, nodes, light, proximityEligibility) {
   const grid = buildProximityGrid(nodes);
   let proximityChecks = 0;
   let proximityEdgesDrawn = 0;
@@ -235,7 +247,10 @@ function drawProximityEdges(ctx, nodes, light) {
           if (Math.abs(dx) > PROXIMITY_RADIUS) continue;
           const dy = one.y - two.y;
           if (Math.abs(dy) > PROXIMITY_RADIUS) continue;
-          if (dx * dx + dy * dy > PROXIMITY_RADIUS_SQ || hash01(one.index * 17 + two.index * 23) < 0.72) continue;
+          if (
+            dx * dx + dy * dy > PROXIMITY_RADIUS_SQ
+            || !proximityEligibility[one.index * nodes.length + two.index]
+          ) continue;
 
           proximityEdgesDrawn += 1;
           ctx.moveTo(one.x, one.y);
@@ -351,6 +366,7 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
     [graphScale],
   );
   const dust = useMemo(() => makeDust(graphScale.dustCount), [graphScale.dustCount]);
+  const proximityEligibility = useMemo(() => makeProximityEligibility(graphScale.nodeCount), [graphScale.nodeCount]);
   const nodesRef = useRef([]);
   const [dragging, setDragging] = useState(false);
 
@@ -545,7 +561,7 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
       }
       frameRecorder?.stage("anchorEdges");
 
-      const { proximityChecks, proximityEdgesDrawn } = drawProximityEdges(context, nodes, light);
+      const { proximityChecks, proximityEdgesDrawn } = drawProximityEdges(context, nodes, light, proximityEligibility);
       resetCanvasLineState(context);
       frameRecorder?.stage("proximityEdges");
 
@@ -582,7 +598,7 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseleave", onLeave);
     };
-  }, [dust, formation, graphScale, perfCollector, selectedNode, theme]);
+  }, [dust, formation, graphScale, perfCollector, proximityEligibility, selectedNode, theme]);
 
   return (
     <canvas
