@@ -255,17 +255,15 @@ function drawProximityEdges(ctx, nodes, light, proximityEligibility) {
             const two = nodes[bucket[rightIndex]];
             proximityChecks += 1;
 
+            const first = one.index < two.index ? one : two;
+            const second = one.index < two.index ? two : one;
+            if (!proximityEligibility[first.index * nodes.length + second.index]) continue;
+
             const dx = one.x - two.x;
             if (Math.abs(dx) > PROXIMITY_RADIUS) continue;
             const dy = one.y - two.y;
             if (Math.abs(dy) > PROXIMITY_RADIUS) continue;
-
-            const first = one.index < two.index ? one : two;
-            const second = one.index < two.index ? two : one;
-            if (
-              dx * dx + dy * dy > PROXIMITY_RADIUS_SQ
-              || !proximityEligibility[first.index * nodes.length + second.index]
-            ) continue;
+            if (dx * dx + dy * dy > PROXIMITY_RADIUS_SQ) continue;
 
             proximityEdgesDrawn += 1;
             ctx.moveTo(one.x, one.y);
