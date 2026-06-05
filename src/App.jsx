@@ -205,10 +205,17 @@ function buildProximityGrid(nodes) {
   return grid;
 }
 
-function drawProximityEdges(ctx, nodes, theme, light, time) {
+function drawProximityEdges(ctx, nodes, light) {
   const grid = buildProximityGrid(nodes);
   let proximityChecks = 0;
   let proximityEdgesDrawn = 0;
+  const alpha = light ? 0.06 : 0.045;
+
+  resetCanvasLineState(ctx);
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = light ? "rgba(20, 20, 20, 0.42)" : "rgba(235, 235, 235, 0.45)";
+  ctx.lineWidth = 0.7;
+  ctx.beginPath();
 
   for (const one of nodes) {
     const cellX = one.cellX;
@@ -231,11 +238,15 @@ function drawProximityEdges(ctx, nodes, theme, light, time) {
           if (dx * dx + dy * dy > PROXIMITY_RADIUS_SQ || hash01(one.index * 17 + two.index * 23) < 0.72) continue;
 
           proximityEdgesDrawn += 1;
-          drawLine(ctx, one, two, theme, light ? 0.06 : 0.045, time);
+          ctx.moveTo(one.x, one.y);
+          ctx.lineTo(two.x, two.y);
         }
       }
     }
   }
+
+  if (proximityEdgesDrawn > 0) ctx.stroke();
+  ctx.globalAlpha = 1;
 
   return { proximityChecks, proximityEdgesDrawn };
 }
@@ -534,7 +545,7 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
       }
       frameRecorder?.stage("anchorEdges");
 
-      const { proximityChecks, proximityEdgesDrawn } = drawProximityEdges(context, nodes, theme, light, time);
+      const { proximityChecks, proximityEdgesDrawn } = drawProximityEdges(context, nodes, light);
       resetCanvasLineState(context);
       frameRecorder?.stage("proximityEdges");
 
