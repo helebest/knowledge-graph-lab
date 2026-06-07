@@ -120,20 +120,20 @@ after(async () => {
 
 test("clicking a graph node opens its detail card", async () => {
   const state = await getGraphState();
-  const center = getNode(state, "cozy");
+  const center = getNode(state, "nexus");
 
   await page.mouse.click(center.x, center.y);
   await page.waitForSelector('aside[data-node-card="true"]', { timeout: 5_000 });
 
   const cardText = await page.locator('aside[data-node-card="true"]').innerText();
-  assert.match(cardText, /COZY/i);
+  assert.match(cardText, /NEXUS/i);
   assert.match(cardText, /linked nodes in constellation/i);
 });
 
 test("dragging the graph rotates it in 3D instead of panning the plane", async () => {
   const beforeState = await getGraphState();
-  const centerBefore = getNode(beforeState, "cozy");
-  const tomeBefore = getNode(beforeState, "tome");
+  const centerBefore = getNode(beforeState, "nexus");
+  const offCenterBefore = getNode(beforeState, "semantic-index");
 
   await page.mouse.move(centerBefore.x, centerBefore.y);
   await page.mouse.down();
@@ -152,10 +152,10 @@ test("dragging the graph rotates it in 3D instead of panning the plane", async (
   await page.waitForTimeout(650);
 
   const afterState = await getGraphState();
-  const centerAfter = getNode(afterState, "cozy");
-  const tomeAfter = getNode(afterState, "tome");
+  const centerAfter = getNode(afterState, "nexus");
+  const offCenterAfter = getNode(afterState, "semantic-index");
   const centerTravel = Math.hypot(centerAfter.x - centerBefore.x, centerAfter.y - centerBefore.y);
-  const tomeTravel = Math.hypot(tomeAfter.x - tomeBefore.x, tomeAfter.y - tomeBefore.y);
+  const offCenterTravel = Math.hypot(offCenterAfter.x - offCenterBefore.x, offCenterAfter.y - offCenterBefore.y);
   const maxDepthChange = Math.max(
     ...beforeState.nodes.map((beforeNode) => {
       const afterNode = afterState.nodes.find((item) => item.index === beforeNode.index);
@@ -166,7 +166,7 @@ test("dragging the graph rotates it in 3D instead of panning the plane", async (
   assert.ok(Math.abs(afterState.rotation.x - beforeState.rotation.x) > 0.18);
   assert.ok(Math.abs(afterState.rotation.y - beforeState.rotation.y) > 0.45);
   assert.ok(maxDepthChange > 40, `Expected depth to change under 3D rotation, got ${maxDepthChange}`);
-  assert.ok(tomeTravel > 20, `Expected off-center node to move under rotation, got ${tomeTravel}`);
+  assert.ok(offCenterTravel > 20, `Expected off-center node to move under rotation, got ${offCenterTravel}`);
   assert.ok(centerTravel < 12, `Expected center node to stay anchored, got ${centerTravel}`);
   assert.equal(await page.locator('aside[data-node-card="true"]').count(), 0);
 });

@@ -203,7 +203,7 @@ async function collectIdle(page, durationMs) {
 
 async function collectDrag(page) {
   const beforeState = await getGraphState(page);
-  const center = getNode(beforeState, "cozy");
+  const center = getNode(beforeState, "nexus");
   const beforeRotation = beforeState.targetRotation;
 
   await page.mouse.move(center.x, center.y);
@@ -235,7 +235,7 @@ async function collectFormationSwitch(page) {
 
 async function collectClickCard(page) {
   const state = await getGraphState(page);
-  const center = getNode(state, "cozy");
+  const center = getNode(state, "nexus");
   const clickStart = await page.evaluate(() => performance.now());
 
   await page.mouse.click(center.x, center.y);
@@ -243,7 +243,7 @@ async function collectClickCard(page) {
 
   const cardVisibleMs = await page.evaluate((start) => performance.now() - start, clickStart);
   const cardText = await page.locator('aside[data-node-card="true"]').innerText();
-  assert.match(cardText, /COZY/i);
+  assert.match(cardText, /NEXUS/i);
 
   return { cardVisibleMs, snapshot: await getPerfSnapshot(page) };
 }
