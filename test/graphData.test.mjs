@@ -43,7 +43,7 @@ test("every node type has a card label", () => {
 });
 
 test("visual node content starts with the center node and cycles through content nodes", () => {
-  assert.equal(getNodeContent(0).id, "cozy");
+  assert.equal(getNodeContent(0).id, "nexus");
   assert.equal(getNodeContent(1).id, graphNodes[1].id);
   assert.equal(getNodeContent(graphNodes.length).id, graphNodes[1].id);
   assert.equal(getNodeContent(visualNodeCount - 1).id, graphNodes[(visualNodeCount - 2) % (graphNodes.length - 1) + 1].id);
