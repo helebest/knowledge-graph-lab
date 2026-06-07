@@ -412,11 +412,25 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
   const proximityEligibility = useMemo(() => makeProximityEligibility(graphScale.nodeCount), [graphScale.nodeCount]);
   const nodesRef = useRef([]);
   const selectedIndexRef = useRef(null);
+  const formationRef = useRef(formation);
+  const retargetRef = useRef(null);
   const [dragging, setDragging] = useState(false);
+
+  // Keep the latest formation in a ref, written during render so it is always
+  // current regardless of effect ordering. The render effect's resize()/retarget()
+  // read this instead of depending on `formation`, which would otherwise rebuild
+  // the whole WebGL scene on every switch (the source of the ~32ms spike).
+  formationRef.current = formation;
 
   useEffect(() => {
     selectedIndexRef.current = selectedNode?.index ?? null;
   }, [selectedNode]);
+
+  // A formation change only moves node targets, so retarget in place instead of
+  // tearing down and rebuilding the WebGL context, geometry, and ~20 textures.
+  useEffect(() => {
+    retargetRef.current?.();
+  }, [formation]);
 
   function handleCanvasClick(event) {
     const canvas = canvasRef.current;
@@ -584,7 +598,7 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
       });
 
       const nextNodes = Array.from({ length: graphScale.nodeCount }, (_, index) => {
-        const target = makeNode(index, width, height, formation, graphScale.nodeCount);
+        const target = makeNode(index, width, height, formationRef.current, graphScale.nodeCount);
         const localTarget = targetToLocal(target, width, height);
         const current = nodesRef.current[index];
         return {
@@ -607,9 +621,10 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
 
     function retarget() {
       nodesRef.current = Array.from({ length: graphScale.nodeCount }, (_, index) => {
-        const target = makeNode(index, width, height, formation, graphScale.nodeCount);
+        const target = makeNode(index, width, height, formationRef.current, graphScale.nodeCount);
         const localTarget = targetToLocal(target, width, height);
-        const current = nodesRef.current[index] || target;
+        const current = nodesRef.current[index]
+          || { ...target, localX: localTarget.x, localY: localTarget.y, localZ: localTarget.z };
         return {
           ...current,
           radius: target.radius,
@@ -768,6 +783,7 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
       frame = requestAnimationFrame(render);
     }
 
+    retargetRef.current = retarget;
     resize();
     retarget();
     window.addEventListener("resize", resize);
@@ -777,13 +793,14 @@ function CozyGraph({ formation, theme, selectedNode, onNodeSelect }) {
 
     return () => {
       cancelAnimationFrame(frame);
+      retargetRef.current = null;
       window.removeEventListener("resize", resize);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseleave", onLeave);
       disposeObject3d(scene);
       renderer.dispose();
     };
-  }, [dust, formation, graphScale, perfCollector, proximityEligibility, theme]);
+  }, [dust, graphScale, perfCollector, proximityEligibility, theme]);
 
   return (
     <canvas

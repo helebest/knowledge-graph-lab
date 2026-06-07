@@ -170,3 +170,50 @@ test("dragging the graph rotates it in 3D instead of panning the plane", async (
   assert.ok(centerTravel < 12, `Expected center node to stay anchored, got ${centerTravel}`);
   assert.equal(await page.locator('aside[data-node-card="true"]').count(), 0);
 });
+
+async function settledState() {
+  // Park the cursor at viewport center so parallax is zero and consistent across
+  // captures, then let the 0.045 position ease settle before reading positions.
+  await page.mouse.move(864, 404);
+  await page.waitForTimeout(2_000);
+  return getGraphState();
+}
+
+function positionsByIndex(state) {
+  return new Map(state.nodes.map((node) => [node.index, node]));
+}
+
+test("switching formation retargets nodes in place and back without rebuilding", async () => {
+  const designState = await settledState();
+  const designByIndex = positionsByIndex(designState);
+
+  await page.getByRole("button", { name: "Engineering" }).click();
+  const engineeringState = await settledState();
+
+  let moved = 0;
+  let maxTravel = 0;
+  for (const node of engineeringState.nodes) {
+    const before = designByIndex.get(node.index);
+    if (!before) continue;
+    const travel = Math.hypot(node.x - before.x, node.y - before.y);
+    if (travel > 20) moved += 1;
+    maxTravel = Math.max(maxTravel, travel);
+  }
+
+  assert.ok(moved >= 10, `Expected many nodes to move on formation switch, got ${moved}`);
+  assert.ok(maxTravel > 60, `Expected a large layout shift between formations, got ${maxTravel}`);
+  // Clicking a formation control must not open a node detail card.
+  assert.equal(await page.locator('aside[data-node-card="true"]').count(), 0);
+
+  await page.getByRole("button", { name: "Design" }).click();
+  const backState = await settledState();
+
+  let maxReturn = 0;
+  for (const node of backState.nodes) {
+    const before = designByIndex.get(node.index);
+    if (!before) continue;
+    maxReturn = Math.max(maxReturn, Math.hypot(node.x - before.x, node.y - before.y));
+  }
+
+  assert.ok(maxReturn < 15, `Expected nodes to return to the Design layout, got ${maxReturn}`);
+});
